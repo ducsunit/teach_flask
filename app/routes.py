@@ -1,102 +1,162 @@
 # Blueprint -> chia code thành các module
 # web module auth -> xác thực, course -> khóa học, cart -> giỏ hàng 
+from calendar import c
+from hmac import new
+from shutil import ExecError
 from flask import Blueprint, jsonify, request, abort
 
 from .models import Course
+
+from .extensions import db
 # course -> tên để đăng kí url
 # abort()
 course_bp = Blueprint('course', __name__)
 
 # RESTful API
-courses = [
-    {
-        "id": 1,
-        "name": "Lập trình Java",
-        "description": "Full snack 2025",
-        "price": 150000 
-    },
-    {
-        "id": 2,
-        "name": "Lập trình Python",
-        "description": "Full snack 2025",
-        "price": 99000 
-    },
-    {
-        "id": 3,
-        "name": "Lập trình C",
-        "description": "Full snack 2025",
-        "price": 50000 
-    },
+# courses = [
+#     {
+#         "id": 1,
+#         "name": "Lập trình Java",
+#         "description": "Full snack 2025",
+#         "price": 150000 
+#     },
+#     {
+#         "id": 2,
+#         "name": "Lập trình Python",
+#         "description": "Full snack 2025",
+#         "price": 99000 
+#     },
+#     {
+#         "id": 3,
+#         "name": "Lập trình C",
+#         "description": "Full snack 2025",
+#         "price": 50000 
+#     },
 
-]
+# ]
 
-def find_course(course_id):
-    for c in courses:
-        if c['id'] == course_id:
-            return c
-    return None
+# API lấy danh sách khóa học -> GET
+@course_bp.route("/courses", methods=['GET'])
+def get_all_courses():
 
-@course_bp.route('/courses', methods=['GET'])
-def get_all_course():
-    return jsonify(courses)
+    # Course.query.all()
+    '''
+    - Nhiệm vụ -> "SELECT * FROM courses" -> MySQL
+    - Kết quả trả về : List các object (VD: [<Object1>, <Object2>])
+    - Lưu ý: Nó KHÔNG trả về JSON hay Dictionary.
+    '''
+    course_objects = Course.query.all()
+    course_json = []
+
+    for course in course_objects:
+        course_json.append({
+            "id": course.id,
+            "name": course.name,
+            "description": course.description,
+            "price": course.price
+        })
+    return jsonify(course_json)
+
+# lấy khóa học theo id
+@course_bp.route('/courses/<int:course_id>', methods=['GET'])
+def get_course_by_id(course_id):
+    course = db.session.get(Course, course_id)
+
+    if not course:
+        return abort(404)
+    
+    return jsonify({
+        "id": course.id,
+        "name": course.name,
+        "description": course.description,
+        "price": course.price
+    })
 
 @course_bp.route('/courses', methods=['POST'])
 def create_course():
-    # lấy dữ liệu người dùng gửi lên
-    new_data = request.get_json()
+    data = request.get_json()
 
-    # Kiểm tra dữ liệu gửi lên có đúng không
-    if not new_data or 'name' not in new_data:
-        abort(400, description='Thiếu tên khóa học')
+    if not data or 'name' not in data:
+        abort(400, description="Thiếu tên khóa học")
+
+    new_course = Course(name=data['name'], 
+                        description=data['description'],
+                        price=data['price'])
     
-    # tạo id mới
-    if len(courses) > 0:
-        new_id = courses[-1]['id'] + 1
-    else:
-        new_id = 1
-    
-    # tạo khóa học mới 
-    new_course = {
-        "id": new_id,
-        "name": new_data['name'],
-        "description": new_data['description'],
-        "price": new_data['price']
-    }
+    try:
+        # sẽ lưu nhưng chưa lưu xuống db ngay
+        db.session.add(new_course)
 
-    # lưu dữ liệu 
-    courses.append(new_course)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
 
-    # trả kết quả về
-    return jsonify(new_course), 201 
-
-@course_bp.route('/courses/<int:course_id>', methods=['PUT'])
-def update_course(course_id):
-    course_can_update = find_course(course_id)
-    
-    # kiểm tra nếu không tìm được
-    if course_can_update is None:
-        abort(404)
-    
-    json_data = request.get_json()
-    # Cập nhật thông tin
-    course_can_update['name'] = json_data.get('name', course_can_update['name'])
-    course_can_update['description'] = json_data.get('description', course_can_update['description'])
-    course_can_update['price'] = json_data.get('price', course_can_update['price'])
-
-    return jsonify(course_can_update)
-
-@course_bp.route('/courses/<int:course_id>', methods=["DELETE"])
-def delete_course(course_id):
-    course_can_xoa = find_course(course_id)
-
-    if course_can_xoa is None:
-        abort(404)
-    
-    courses.remove(course_can_xoa)
+        return jsonify({'error': str(e)}), 500
 
     return jsonify({
-        'result': True,
-        'message': 'Xóa thành công'
+        "id": new_course.id,
+        "name": new_course.name,
+        "description": new_course.description,
+        "price": new_course.price
+    }), 201
+
+@course_bp.route('/courses/<int:course_id>', methods=['PUT']) 
+def update_course(course_id):
+    '''
+    Docstring for update_course
+    
+    :param course_id: id course
+
+    - Nhiệm vụ: Tìm trong bảng courses dòng có id == course_id
+    - <=> SELECT * FROM course WHERE id = 5
+    '''
+    course = db.session.get(Course, course_id)
+
+    if not course:
+        return abort(404)
+    
+    data = request.get_json()
+
+    '''
+    - get lấy name trong dữ liệu mình gửi lên
+    - nếu có dữ liệu bị thay đổi gán lại cho course.name 
+    - nếu không giữ nguyên
+    '''
+    course.name = data.get('name', course.name)
+    course.description = data.get('description', course.description)
+    course.price = data.get('price', course.price)
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return abort(500)
+    
+    return jsonify({
+        "id": course.id,
+        "name": course.name,
+        "description": course.description,
+        "price": course.price
+    })
+
+@course_bp.route('/courses/<int:course_id>', methods=['DELETE'])
+def delete_course(course_id):
+    course = db.session.get(Course, course_id)
+
+    if not course:
+        return abort(404)
+    
+    try:
+        db.session.delete(course)
+
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return abort(500)
+    
+    return jsonify({
+        "result": True,
+        "message": "Đã xóa thành công khỏi Database !"
     })
 
 
